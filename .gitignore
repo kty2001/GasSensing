@@ -1,0 +1,17 @@
+# Main
+
+# Ignore files
+*.pt
+*.pth
+*.ckpt
+*.log
+
+# Ignore directories
+.venv
+.git
+__pycache__/
+logs/
+checkpoints/
+data/*
+
+# Personal
