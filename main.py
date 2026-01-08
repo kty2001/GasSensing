@@ -2,6 +2,7 @@ import os
 import glob
 import argparse
 import pickle
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -11,6 +12,12 @@ import torch.nn.functional as F
 import lightning as L
 from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
+from torchmetrics.classification import (
+    MulticlassAccuracy,
+    MulticlassPrecision,
+    MulticlassRecall,
+    MulticlassF1Score,
+)
 
 from src.model import create_model
 from src.dataset import GasDataModule
@@ -36,6 +43,11 @@ class GasClsModel(L.LightningModule):
             input_length=input_length,
             num_classes=num_classes,
         )
+        
+        self.test_acc = MulticlassAccuracy(num_classes=num_classes)
+        self.test_precision = MulticlassPrecision(num_classes=num_classes, average="macro")
+        self.test_recall = MulticlassRecall(num_classes=num_classes, average="macro")
+        self.test_f1 = MulticlassF1Score(num_classes=num_classes, average="macro")
 
     def forward(self, x):
         return self.model(x)
@@ -65,12 +77,23 @@ class GasClsModel(L.LightningModule):
     def test_step(self, batch, batch_idx):
         x, y = batch
         logits = self(x)
+        preds = torch.argmax(logits, dim=1)
 
         loss = F.cross_entropy(logits, y)
         acc = (logits.argmax(dim=1) == y).float().mean()
 
         self.log("test_loss", loss)
         self.log("test_acc", acc)
+
+        self.test_acc(preds, y)
+        self.test_precision(preds, y)
+        self.test_recall(preds, y)
+        self.test_f1(preds, y)
+
+        self.log("test/acc", self.test_acc, prog_bar=True)
+        self.log("test/precision", self.test_precision)
+        self.log("test/recall", self.test_recall)
+        self.log("test/f1", self.test_f1)
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
@@ -112,7 +135,10 @@ def main(args):
         mode='min',
         patience=15
     )
-    wandb_logger = WandbLogger(project="Gas")
+    wandb_logger = WandbLogger(
+        project="Gas",
+        name=f"{args.model_name}_{datetime.now().strftime("%H%M%S")}"
+    )
     
     gas_to_label = {
         "acetone": 0,
@@ -144,7 +170,6 @@ def main(args):
     train_data = (X_train, y_train)
     test_data = (X_test, y_test)
 
-    model = GasClsModel(args.model_name, input_length=7300)
     trainer = L.Trainer(
         accelerator=args.device,
         devices=1,
@@ -152,14 +177,29 @@ def main(args):
         logger=wandb_logger,
         callbacks=[checkpoint_callback, early_stopping],
     )
-    trainer.fit(model, GasDataModule(train_data, args.batch))
-    trainer.test(model, GasDataModule(test_data, args.batch))
 
+    if args.mode == 'train':
+        model = GasClsModel(args.model_name, input_length=7300)
+        trainer.fit(model, GasDataModule(train_data, args.batch))
+        trainer.test(model, GasDataModule(test_data, args.batch))
+    elif args.mode == 'test':
+        model = GasClsModel.load_from_checkpoint(
+            args.ckpt,
+            model=create_model(
+                model=args.model_name,
+                input_length=7300,
+                num_classes=3,
+            ),
+            num_classes=3,
+        )
+
+        trainer.test(model, GasDataModule(test_data, args.batch))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-d', '--data_path', dest='data', type=str, default='./data/pkl')
     parser.add_argument('-s', '--save_path', dest='save', type=str, default='./checkpoint/')
+    parser.add_argument('-c', '--ckpt_path', dest='ckpt', type=str, default='./checkpoint/')
     parser.add_argument('-mn', '--model_name', type=str, default='cnn1d')
     parser.add_argument('-b', '--batch_size', dest='batch', type=int, default=128)
     parser.add_argument('-e', '--epoch', type=int, default=300)

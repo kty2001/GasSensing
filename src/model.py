@@ -9,13 +9,10 @@ def create_model(
 ):
     if model == "cnn1d":
         return CNN1DClassifier(input_length, num_classes)
-
     elif model == "resnet1d":
         return ResNet1DClassifier(input_length, num_classes)
-
     elif model == "mlp":
         return MLPClassifier(input_length, num_classes)
-
     else:
         raise ValueError(f"Unknown model type: {model}")
 
