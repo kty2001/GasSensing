@@ -11,7 +11,8 @@
 .git
 __pycache__/
 logs/
-checkpoints/
+checkpoint/
 data/*
+wandb
 
 # Personal
