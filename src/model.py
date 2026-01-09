@@ -13,6 +13,8 @@ def create_model(
         return ResNet1DClassifier(input_length, num_classes)
     elif model == "mlp":
         return MLPClassifier(input_length, num_classes)
+    elif model == "imlp":
+        return IMLPClassifier(input_length, num_classes)
     else:
         raise ValueError(f"Unknown model type: {model}")
 
@@ -97,6 +99,25 @@ class MLPClassifier(nn.Module):
             nn.Linear(1024, 256),
             nn.ReLU(),
             nn.Linear(256, num_classes),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+class IMLPClassifier(nn.Module):
+    def __init__(self, input_length: int, num_classes: int):
+        super().__init__()
+
+        self.net = nn.Sequential(
+            nn.Linear(input_length, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, 512),
+            nn.ReLU(),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, num_classes),
         )
 
     def forward(self, x):

@@ -120,8 +120,7 @@ def build_samples(df: dict, gas_to_label: dict):
     return x, y
 
 def main(args):
-    if not os.path.exists(args.save):
-        os.makedirs(args.save)
+    os.makedirs(args.save, exist_ok=True)
     
     checkpoint_callback = ModelCheckpoint(
         monitor='val_loss',
@@ -181,7 +180,6 @@ def main(args):
     if args.mode == 'train':
         model = GasClsModel(args.model_name, input_length=7300)
         trainer.fit(model, GasDataModule(train_data, args.batch))
-        trainer.test(model, GasDataModule(test_data, args.batch))
     elif args.mode == 'test':
         model = GasClsModel.load_from_checkpoint(
             args.ckpt,
