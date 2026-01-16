@@ -13,6 +13,8 @@ def create_model(
         return ICNN1DClassifier(input_length, num_classes)
     elif model == "icnnnp":
         return ICNNNPClassifier(input_length, num_classes)
+    elif model == "cnnd":
+        return CNNDClassifier(input_length, num_classes)
     elif model == "cnnnp":
         return CNNNPClassifier(input_length, num_classes)
     elif model == "resnet1d":
@@ -46,6 +48,28 @@ class CNN1DClassifier(nn.Module):
         x = self.pool(x).squeeze(-1)
         return self.fc(x)
     
+
+class CNNDClassifier(nn.Module):
+    def __init__(self, input_length: int, num_classes: int):
+        super().__init__()
+
+        self.conv1 = nn.Conv1d(1, 16, kernel_size=7, padding=3, dilation=1)
+        self.conv2 = nn.Conv1d(16, 32, kernel_size=7, padding=6, dilation=2)
+        self.conv3 = nn.Conv1d(32, 64, kernel_size=7, padding=12, dilation=4)
+
+        self.flatten = nn.Flatten()
+        self.fc = nn.Linear(64 * input_length, num_classes)
+
+    def forward(self, x):
+        x = x.unsqueeze(1)
+
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+
+        x = self.flatten(x)
+        return self.fc(x)
+
 
 class CNNNPClassifier(nn.Module):
     def __init__(self, input_length: int, num_classes: int):

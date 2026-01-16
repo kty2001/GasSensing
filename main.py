@@ -194,30 +194,12 @@ def main(args):
     )
     wandb_logger = WandbLogger(
         project="Gas",
-        name=f"{args.model_name}_{datetime.now().strftime("%m%d_%H%M%S")}"
+        name=f"filtered_{args.model_name}_{datetime.now().strftime("%m%d_%H%M%S")}"
     )
     wandb_run = wandb_logger.experiment
     fold_table = wandb.Table(columns=["Fold", "Acc", "Precision", "Recall", "F1"])
-    
-    gas_to_label = {
-        "acetone": 0,
-        "benzene": 1,
-        "toluene": 2,
-    }
-    
-    df = {}
-    for path in glob.glob("data/pkl/*.pkl"):
-        filename = os.path.splitext(os.path.basename(path))[0]
-        gas, data_type = filename.split("_", 1)
 
-        if gas not in df:
-            df[gas] = {}
-
-        with open(path, "rb") as f:
-            obj = pickle.load(f)
-
-        df[gas][data_type] = obj
-    X, y_index, y_onehot = build_samples(df, gas_to_label)
+    X, y_index, y_onehot = build_samples()
 
     X_train, X_test, y_index_train, y_index_test, y_onehot_train, y_onehot_test = \
         train_test_split(
@@ -247,9 +229,7 @@ def main(args):
             "f1": []
         }
 
-        for fold, (tr_idx, val_idx) in enumerate(
-            skf.split(X_train, y_index_train)
-        ):
+        for fold, (tr_idx, val_idx) in enumerate(skf.split(X_train, y_index_train)):
             print(f"\n--- Fold {fold+1}/5 ---")
 
             X_tr, X_val = X_train[tr_idx], X_train[val_idx]
@@ -270,7 +250,7 @@ def main(args):
                 accelerator=args.device,
                 devices=1,
                 max_epochs=args.epoch,
-                logger=False,
+                logger=wandb_logger,
                 enable_checkpointing=False
             )
 
@@ -306,7 +286,7 @@ def main(args):
                 f"{fold_results['recall'][i]:>12.8f} "
                 f"{fold_results['f1'][i]:>12.8f}"
             )
-        wandb_run.log({"kfold/per_fold_results": fold_table})
+        wandb_run.log({"per_fold_table": fold_table})
 
         print("\n[K-Fold Validation Result]")
         for k, v in fold_results.items():
@@ -387,8 +367,8 @@ if __name__ == "__main__":
     parser.add_argument('-d', '--data_path', dest='data', type=str, default='./data/pkl')
     parser.add_argument('-s', '--save_path', dest='save', type=str, default='./checkpoint/')
     parser.add_argument('-c', '--ckpt_path', dest='ckpt', type=str, default='./checkpoint/')
-    parser.add_argument('-mn', '--model_name', type=str, default='cnn1d')
-    parser.add_argument('-b', '--batch_size', dest='batch', type=int, default=128)
+    parser.add_argument('-mn', '--model_name', type=str, default='mlp')
+    parser.add_argument('-b', '--batch_size', dest='batch', type=int, default=64)
     parser.add_argument('-e', '--epoch', type=int, default=300)
     parser.add_argument('-dv', '--device', type=str, default='gpu')
     parser.add_argument('-g', '--gpus', type=str, nargs='+', default='0')
