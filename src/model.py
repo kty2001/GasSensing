@@ -17,6 +17,12 @@ def create_model(
         return CNNDClassifier(input_length, num_classes)
     elif model == "cnnnp":
         return CNNNPClassifier(input_length, num_classes)
+    elif model == "cnntp":
+        return CNNTPClassifier(input_length, num_classes)
+    elif model == "cnnmp":
+        return CNNMPClassifier(input_length, num_classes)
+    elif model == "cnn1c":
+        return CNN1CClassifier(input_length, num_classes)
     elif model == "resnet1d":
         return ResNet1DClassifier(input_length, num_classes)
     elif model == "mlp":
@@ -92,6 +98,7 @@ class CNNNPClassifier(nn.Module):
         x = self.flatten(x)
         return self.fc(x)
 
+
 class ICNNNPClassifier(nn.Module):
     def __init__(self, input_length: int, num_classes: int):
         super().__init__()
@@ -115,7 +122,7 @@ class ICNNNPClassifier(nn.Module):
         x = F.relu(self.conv5(x))
         x = self.flatten(x)
         return self.fc(x)
-    
+
 
 class ICNN1DClassifier(nn.Module):
     def __init__(self, input_length: int, num_classes: int):
@@ -224,3 +231,75 @@ class IMLPClassifier(nn.Module):
 
     def forward(self, x):
         return self.net(x)
+
+
+class CNNMPClassifier(nn.Module):
+    def __init__(self, input_length: int, num_classes: int):
+        super().__init__()
+
+        self.conv1 = nn.Conv1d(1, 16, kernel_size=7, padding=3)
+        self.conv2 = nn.Conv1d(16, 32, kernel_size=7, padding=3)
+        self.conv3 = nn.Conv1d(32, 64, kernel_size=7, padding=3)
+
+        self.pool = nn.MaxPool1d(kernel_size=2)
+        self.flatten = nn.Flatten()
+        self.fc = nn.Linear(64 * (input_length // 2), num_classes)
+
+    def forward(self, x):
+        x = x.unsqueeze(1)
+
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+        x = self.pool(x)
+        x = self.flatten(x)
+        
+        return self.fc(x)
+
+
+class CNNTPClassifier(nn.Module):
+    def __init__(self, input_length: int, num_classes: int):
+        super().__init__()
+
+        self.conv1 = nn.Conv1d(1, 16, kernel_size=7, padding=3)
+        self.conv2 = nn.Conv1d(16, 32, kernel_size=7, padding=3)
+        self.conv3 = nn.Conv1d(32, 64, kernel_size=7, padding=3)
+
+        self.pool = nn.AdaptiveAvgPool1d(16)
+        self.flatten = nn.Flatten()
+        self.fc = nn.Linear(64 * 16, num_classes)
+
+    def forward(self, x):
+        x = x.unsqueeze(1)
+
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+        x = self.pool(x)
+        x = self.flatten(x)
+        
+        return self.fc(x)
+
+
+class CNN1CClassifier(nn.Module):
+    def __init__(self, input_length: int, num_classes: int):
+        super().__init__()
+
+        self.conv1 = nn.Conv1d(1, 16, kernel_size=7, padding=3)
+        self.conv2 = nn.Conv1d(16, 32, kernel_size=7, padding=3)
+        self.conv3 = nn.Conv1d(32, 64, kernel_size=7, padding=3)
+
+        self.conv_reduce = nn.Conv1d(64, 16, kernel_size=1)
+        self.flatten = nn.Flatten()
+        self.fc = nn.Linear(16 * input_length, num_classes)
+
+    def forward(self, x):
+        x = x.unsqueeze(1)
+
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+        x = self.conv_reduce(x)
+        x = self.flatten(x)
+        
+        return self.fc(x)
