@@ -8,7 +8,7 @@ SEED = 36
     
 
 
-def build_samples():
+def build_samples(dir_name):
     gas_to_label = {
         "acetone": 0,
         "benzene": 1,
@@ -16,8 +16,7 @@ def build_samples():
     }
 
     df = {}
-    # for path in glob.glob("data/pkl/*.pkl"):
-    for path in glob.glob("data/del_rever/*.pkl"):
+    for path in glob.glob(f"data/{dir_name}/*.pkl"):
         filename = os.path.splitext(os.path.basename(path))[0]
         gas, data_type = filename.split("_", 1)
 
@@ -33,10 +32,12 @@ def build_samples():
     labels = []
 
     for gas, label in gas_to_label.items():
-        # merge = df[gas]["merge"].to_numpy()
-        merge = df[gas]["filtered"].to_numpy()
-        time = merge[:, 0]
-        signal = merge[:, 1:]
+        if dir_name == 'pkl':
+            data = df[gas]["merge"].to_numpy()
+        elif dir_name == 'del':
+            data = df[gas]["filtered"].to_numpy()
+        time = data[:, 0]
+        signal = data[:, 1:]
 
         for i in range(signal.shape[1]):
             samples.append(signal[:, i].astype(np.float32))

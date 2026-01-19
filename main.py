@@ -116,6 +116,15 @@ class GasClsModel(L.LightningModule):
         self.log("val_recall", self.val_recall)
         self.log("val_f1", self.val_f1)
 
+    def on_test_epoch_start(self):
+        self.test_acc.reset()
+        self.test_precision.reset()
+        self.test_recall.reset()
+        self.test_f1.reset()
+
+        self.test_preds.clear()
+        self.test_targets.clear()
+
     def test_step(self, batch, batch_idx):
         x, y = batch
         logits = self(x)
@@ -192,14 +201,23 @@ def main(args):
         mode='min',
         patience=15
     )
-    wandb_logger = WandbLogger(
-        project="Gas",
-        name=f"filtered_{args.model_name}_{datetime.now().strftime("%m%d_%H%M%S")}"
+    if args.data == 'pkl':
+        wandb_logger = WandbLogger(
+            project="Gas",
+            name=f"{args.model_name}_{datetime.now().strftime("%m%d_%H%M%S")}"
+        )
+    elif args.data == 'del':
+        wandb_logger = WandbLogger(
+            project="Gas",
+            name=f"filtered_{args.model_name}_{datetime.now().strftime("%m%d_%H%M%S")}"
     )
+    else:
+        raise ValueError(f"Unknown data type: {args.data}")
+    
     wandb_run = wandb_logger.experiment
     fold_table = wandb.Table(columns=["Fold", "Acc", "Precision", "Recall", "F1"])
 
-    X, y_index, y_onehot = build_samples()
+    X, y_index, y_onehot = build_samples(args.data)
 
     X_train, X_test, y_index_train, y_index_test, y_onehot_train, y_onehot_test = \
         train_test_split(
@@ -362,9 +380,10 @@ def main(args):
 
         test_trainer.test(test_model, datamodule=test_dm)
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('-d', '--data_path', dest='data', type=str, default='./data/pkl')
+    parser.add_argument('-d', '--data_path', dest='data', type=str, default='pkl')
     parser.add_argument('-s', '--save_path', dest='save', type=str, default='./checkpoint/')
     parser.add_argument('-c', '--ckpt_path', dest='ckpt', type=str, default='./checkpoint/')
     parser.add_argument('-mn', '--model_name', type=str, default='mlp')
