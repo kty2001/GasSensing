@@ -1,4 +1,5 @@
 import os
+import shutil
 import glob
 import argparse
 import pickle
@@ -54,10 +55,10 @@ class GasClsModel(L.LightningModule):
         # One-Hot Encoding loss_fn
         self.criterion = nn.BCEWithLogitsLoss()
 
-        self.val_acc = MulticlassAccuracy(num_classes=3)
-        self.val_precision = MulticlassPrecision(num_classes=3, average="macro")
-        self.val_recall = MulticlassRecall(num_classes=3, average="macro")
-        self.val_f1 = MulticlassF1Score(num_classes=3, average="macro")
+        self.val_acc = MulticlassAccuracy(num_classes=num_classes)
+        self.val_precision = MulticlassPrecision(num_classes=num_classes, average="macro")
+        self.val_recall = MulticlassRecall(num_classes=num_classes, average="macro")
+        self.val_f1 = MulticlassF1Score(num_classes=num_classes, average="macro")
         
         self.test_acc = MulticlassAccuracy(num_classes=num_classes)
         self.test_precision = MulticlassPrecision(num_classes=num_classes, average="macro")
@@ -103,7 +104,6 @@ class GasClsModel(L.LightningModule):
         
         preds = torch.argmax(logits, dim=1)
         targets = torch.argmax(y, dim=1)
-        acc = (preds == targets).float().mean()
 
         self.val_acc(preds, targets)
         self.val_precision(preds, targets)
@@ -111,7 +111,7 @@ class GasClsModel(L.LightningModule):
         self.val_f1(preds, targets)
 
         self.log("val_loss", loss, prog_bar=True)
-        self.log("val_acc", acc, prog_bar=True)
+        self.log("val_acc", self.val_acc, prog_bar=True)
         self.log("val_precision", self.val_precision)
         self.log("val_recall", self.val_recall)
         self.log("val_f1", self.val_f1)
@@ -173,12 +173,11 @@ class GasClsModel(L.LightningModule):
         plt.ylabel("True label")
         plt.title("Confusion Matrix")
 
-        save_path = os.path.join("./result", f"cm_{args.model_name}_{datetime.now().strftime("%m%d_%H%M%S")}.png")
+        save_path = os.path.join("./result", f"cm_{args.model_name}_{datetime.now().strftime('%m%d_%H%M%S')}.png")
         plt.tight_layout()
         plt.savefig(save_path, dpi=300)
         plt.close()
 
-        # reset (안 하면 여러 test run 시 누적됨)
         self.test_preds.clear()
         self.test_targets.clear()
     
@@ -188,35 +187,8 @@ class GasClsModel(L.LightningModule):
 
 def main(args):
     os.makedirs(args.save, exist_ok=True)
+    dt_now = datetime.now().strftime('%m%d_%H%M%S')
     
-    checkpoint_callback = ModelCheckpoint(
-        monitor='val_loss',
-        mode='min',
-        dirpath= f'{args.save}',
-        filename= f'{args.model_name}-'+'{epoch:02d}-{val_loss:.2f}',
-        save_top_k=1,
-    )
-    early_stopping = EarlyStopping(
-        monitor='val_loss',
-        mode='min',
-        patience=15
-    )
-    if args.data == 'pkl':
-        wandb_logger = WandbLogger(
-            project="Gas",
-            name=f"{args.model_name}_{datetime.now().strftime("%m%d_%H%M%S")}"
-        )
-    elif args.data == 'del':
-        wandb_logger = WandbLogger(
-            project="Gas",
-            name=f"filtered_{args.model_name}_{datetime.now().strftime("%m%d_%H%M%S")}"
-    )
-    else:
-        raise ValueError(f"Unknown data type: {args.data}")
-    
-    wandb_run = wandb_logger.experiment
-    fold_table = wandb.Table(columns=["Fold", "Acc", "Precision", "Recall", "F1"])
-
     X, y_index, y_onehot = build_samples(args.data)
 
     X_train, X_test, y_index_train, y_index_test, y_onehot_train, y_onehot_test = \
@@ -230,25 +202,40 @@ def main(args):
     train_data = (X_train, y_index_train, y_onehot_train)
     test_data = (X_test, y_index_test, y_onehot_test)
 
+    group_name = f"{args.model_name}_KFold_{dt_now}"
+
     print("Start Train")
     if args.mode == 'train':
+        best_loss = float('inf')
+        best_fold = -1
+        best_ckpt_path = None
+
         print("---------------K-Fold---------------")
-        
         skf = StratifiedKFold(
             n_splits=5,
             shuffle=True,
             random_state=SEED
         )
 
-        fold_results = {
-            "acc": [],
-            "precision": [],
-            "recall": [],
-            "f1": []
-        }
-
         for fold, (tr_idx, val_idx) in enumerate(skf.split(X_train, y_index_train)):
             print(f"\n--- Fold {fold+1}/5 ---")
+
+            if args.data == 'pkl':
+                wandb_logger = WandbLogger(
+                    project="Gas",
+                    name=f"PL_{args.model_name}_Fold{fold+1}_{dt_now}",
+                    group=group_name,
+                    reinit=True
+                )
+            elif args.data == 'del':
+                wandb_logger = WandbLogger(
+                    project="Gas",
+                    name=f"PL_filtered_{args.model_name}_Fold{fold+1}_{dt_now}",
+                    group=group_name,
+                    reinit=True
+                )
+            else:
+                raise ValueError(f"Unknown data type: {args.data}")
 
             X_tr, X_val = X_train[tr_idx], X_train[val_idx]
             y_tr, y_val = y_onehot_train[tr_idx], y_onehot_train[val_idx]
@@ -258,10 +245,21 @@ def main(args):
                 val_data=(X_val, y_val),
                 batch_size=args.batch,
             )
-
             fold_model = GasClsModel(
                 model_name=args.model_name,
                 input_length=7300
+            )
+            fold_ckpt = ModelCheckpoint(
+                monitor="val_loss",
+                mode="min",
+                dirpath=f'{args.save}',
+                filename=f"{args.model_name}-fold{fold+1}-{{val_loss:.4f}}",
+                save_top_k=1
+            )
+            early_stopping = EarlyStopping(
+                monitor='val_loss',
+                mode='min',
+                patience=15
             )
 
             fold_trainer = L.Trainer(
@@ -269,121 +267,88 @@ def main(args):
                 devices=1,
                 max_epochs=args.epoch,
                 logger=wandb_logger,
-                enable_checkpointing=False
+                callbacks=[fold_ckpt, early_stopping],
+                enable_checkpointing=True
             )
-
             fold_trainer.fit(fold_model, datamodule=fold_dm)
 
-            val_metrics = fold_trainer.callback_metrics
+            best_score_this_fold = fold_ckpt.best_model_score.item()
+            if best_score_this_fold < best_loss:
+                best_loss = best_score_this_fold
+                best_fold = fold + 1
+                best_ckpt_path = fold_ckpt.best_model_path
+            
+            wandb.finish()
 
-            val_acc = val_metrics["val_acc"].item()
-            val_precision = val_metrics["val_precision"].item()
-            val_recall = val_metrics["val_recall"].item()
-            val_f1 = val_metrics["val_f1"].item()
+        print("\n" + "="*50)
+        print(f"Best Fold: Fold {best_fold}")
+        print(f"Best Val Loss: {best_loss:.6f}")
+        print(f"Checkpoint: {best_ckpt_path}")
 
-            fold_results["acc"].append(val_acc)
-            fold_results["precision"].append(val_precision)
-            fold_results["recall"].append(val_recall)
-            fold_results["f1"].append(val_f1)
-
-            fold_table.add_data(
-                fold + 1,
-                val_acc,
-                val_precision,
-                val_recall,
-                val_f1
-            )
-
-        print("\n[Per-Fold Validation Result]")
-        print(f"{'Fold':<6} {'Acc':>12} {'Precision':>12} {'Recall':>12} {'F1':>12}")
-        for i in range(len(fold_results["acc"])):
-            print(
-                f"{i+1:<6} "
-                f"{fold_results['acc'][i]:>12.8f} "
-                f"{fold_results['precision'][i]:>12.8f} "
-                f"{fold_results['recall'][i]:>12.8f} "
-                f"{fold_results['f1'][i]:>12.8f}"
-            )
-        wandb_run.log({"per_fold_table": fold_table})
-
-        print("\n[K-Fold Validation Result]")
-        for k, v in fold_results.items():
-            print(
-                f"{k.upper():<10} "
-                f"Mean = {np.mean(v):.8f}, "
-                f"Std = {np.std(v):.8f}"
-            )
-        wandb_run.log({
-            "kfold/acc_mean": np.mean(fold_results["acc"]),
-            "kfold/acc_std": np.std(fold_results["acc"]),
-            "kfold/precision_mean": np.mean(fold_results["precision"]),
-            "kfold/precision_std": np.std(fold_results["precision"]),
-            "kfold/recall_mean": np.mean(fold_results["recall"]),
-            "kfold/recall_std": np.std(fold_results["recall"]),
-            "kfold/f1_mean": np.mean(fold_results["f1"]),
-            "kfold/f1_std": np.std(fold_results["f1"]),
+        print("Start Test")
+        test_logger = WandbLogger(
+            project="Gas",
+            name=f"Test_{args.model_name}_BestFold{best_fold}",
+            group=group_name,
+            reinit=True
+        )
+        test_logger.experiment.config.update({
+            "best_fold": best_fold,
+            "best_val_loss": best_loss,
+            "best_checkpoint_path": best_ckpt_path,
         })
-
-        print("---------------Final---------------")
-        X_tr, X_val, y_tr, y_val = train_test_split(
-            X_train, y_onehot_train,
-            test_size=0.1,
-            random_state=SEED,
-            stratify=y_index_train
-        )
-
-        final_dm = GasDataModule(
-            train_data=(X_tr, y_tr),
-            val_data=(X_val, y_val),
-            test_data=(X_test, y_onehot_test),
-            batch_size=args.batch,
-        )
-
-        final_model = GasClsModel(args.model_name, input_length=7300)
-
-        final_trainer = L.Trainer(
-            accelerator=args.device,
-            devices=1,
-            max_epochs=args.epoch,
-            logger=wandb_logger,
-            callbacks=[checkpoint_callback, early_stopping],
-        )
-
-        final_trainer.fit(final_model, datamodule=final_dm)
-        final_trainer.test(final_model, datamodule=final_dm)
-
-    elif args.mode == 'test':
         test_dm = GasDataModule(
-            train_data=None,
-            val_data=None,
             test_data=(X_test, y_onehot_test),
             batch_size=args.batch,
         )
-
-        test_model = GasClsModel.load_from_checkpoint(
-            args.ckpt,
-            model=create_model(
-                model=args.model_name,
-                input_length=7300,
-                num_classes=3,
-            ),
+        best_model = GasClsModel.load_from_checkpoint(
+            best_ckpt_path,
+            model_name=args.model_name,
+            input_length=7300,
             num_classes=3,
         )
 
         test_trainer = L.Trainer(
             accelerator=args.device,
             devices=1,
-            max_epochs=args.epoch,
-            logger=wandb_logger,
-            callbacks=[checkpoint_callback, early_stopping],
+            logger=test_logger,
+        )
+        test_trainer.test(best_model, datamodule=test_dm)
+
+        dst = os.path.join(args.save, f"Best_{os.path.basename(best_ckpt_path)}")
+        shutil.copy(best_ckpt_path, dst)
+
+    elif args.mode == 'test':
+        test_logger = WandbLogger(
+            project="Gas",
+            name=f"Test_{args.model_name}",
+            group=group_name,
+            reinit=True
+        )
+        test_dm = GasDataModule(
+            test_data=(X_test, y_onehot_test),
+            batch_size=args.batch,
+        )
+        test_model = GasClsModel.load_from_checkpoint(
+            args.ckpt,
+            model=args.model_name,
+            input_length=7300,
+            num_classes=3,
         )
 
+        test_trainer = L.Trainer(
+            accelerator=args.device,
+            devices=1,
+            logger=test_logger,
+        )
         test_trainer.test(test_model, datamodule=test_dm)
+
+        wandb.finish()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('-d', '--data_path', dest='data', type=str, default='pkl')
+    parser.add_argument('-d', '--data_path', dest='data', type=str, default='del')
     parser.add_argument('-s', '--save_path', dest='save', type=str, default='./checkpoint/')
     parser.add_argument('-c', '--ckpt_path', dest='ckpt', type=str, default='./checkpoint/')
     parser.add_argument('-mn', '--model_name', type=str, default='mlp')
