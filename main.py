@@ -7,6 +7,8 @@ import numpy as np
 import pandas as pd
 import wandb
 from datetime import datetime
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # Sklearn
 from sklearn.model_selection import train_test_split, KFold, StratifiedKFold
@@ -99,7 +101,7 @@ def run_regression(args):
         )
         model = GasRegModel(args.model_name, input_length=X.shape[1], max_ppm=y_max_val)
 
-        logger = WandbLogger(project="Gas-Integrated", name=f"{args.target_gas}_Fold{fold+1}", group=group_name, reinit=True)
+        logger = WandbLogger(project="Gas-Integrated-Final", name=f"{args.target_gas}_Fold{fold+1}", group=group_name, reinit=True)
         
         # ⚡ [수정 2] 체크포인트 이름에 '가스이름' 추가
         # 예: benzene_cnn1d-Fold1-val_loss=0.0123.ckpt
@@ -146,7 +148,7 @@ def run_regression(args):
         print(f"💾 Best Model Copied to: {best_save_name}")
 
         # [수정] 1. 테스트 전용 Logger
-        test_logger = WandbLogger(project="Gas-Integrated", name=f"{args.target_gas}_Test", group=group_name, job_type="test", reinit=True)
+        test_logger = WandbLogger(project="Gas-Integrated-Final", name=f"{args.target_gas}_Test", group=group_name, job_type="test", reinit=True)
         
         # [수정] 2. 테스트 전용 Trainer (DDP 유지)
         test_trainer = L.Trainer(
@@ -218,7 +220,7 @@ def run_classification(args):
         model = GasClsModel(args.model_name, input_length=X.shape[1], num_classes=3)
         
         logger_name = f"Cls_{args.model_name}_Fold{fold+1}"
-        logger = WandbLogger(project="Gas-Integrated", name=logger_name, group=group_name, reinit=True)
+        logger = WandbLogger(project="Gas-Integrated-Final", name=logger_name, group=group_name, reinit=True)
         
         # ⚡ [수정 2] 체크포인트 이름: CLS_모델명...
         ckpt_filename = f"CLS_{args.model_name}-Fold{fold+1}-{{val_loss:.4f}}"
@@ -259,7 +261,7 @@ def run_classification(args):
         print(f"💾 Best Model Copied to: {best_save_name}")
     
         # [수정] 1. 테스트 전용 Logger 생성
-        test_logger = WandbLogger(project="Gas-Integrated", name=f"Cls_{args.model_name}_Test", group=group_name, reinit=True)
+        test_logger = WandbLogger(project="Gas-Integrated-Final", name=f"Cls_{args.model_name}_Test", group=group_name, reinit=True)
         
         # [수정] 2. 테스트 전용 Trainer 생성 (중요: DDP 설정 유지!)
         # 기존 trainer를 재사용하면 이미 닫힌 wandb run을 쓰려다가 에러가 납니다.
@@ -400,11 +402,13 @@ def run_pipeline(args):
     # ⚡ [분석용] 신뢰도 저장을 위한 리스트 추가
     all_confidences = []     
     low_conf_count = 0       # 신뢰도가 낮은 케이스 카운트
-    CONF_THRESHOLD = 0.99     # (예시) 60% 미만이면 '불확실'로 간주
+    CONF_THRESHOLD = 0.9     # (예시) 60% 미만이면 '불확실'로 간주
     
     print("\n🔍 추론 진행 중... (신뢰도 분석 포함)")
     
     current_idx = 0 
+    
+    results_list = []
 
     with torch.no_grad():
         for batch in dataloader:
@@ -471,6 +475,17 @@ def run_pipeline(args):
                         
                         true_ppms.append(true_ppm_val)
                         pred_ppms.append(pred_ppm_val)
+                        
+                        gas_name = target_gases[true_idx]
+                        abs_error = abs(true_ppm_val - pred_ppm_val)
+                        
+                        results_list.append({
+                            "Gas": gas_name,
+                            "True_PPM": true_ppm_val,
+                            "Pred_PPM": pred_ppm_val,
+                            "Confidence": conf_val,
+                            "Abs_Error": abs_error
+                        })
 
     # ---------------------------------------------------------
     # 4. 결과 리포트 (신뢰도 통계 추가)
@@ -515,6 +530,105 @@ def run_pipeline(args):
     print(f"     • MAPE : {mape:.4f} %")
     print(f"     • MSPE : {mspe:.4f} %")
     print("-" * 40)
+    
+    # ---------------------------------------------------------
+    # 5. [수정] Low Confidence 샘플 집중 분석 (교수님 설득용 핵심 자료)
+    # ---------------------------------------------------------
+    print(f"\n🎨 [Focus Analysis] 신뢰도 {CONF_THRESHOLD} 미만 샘플 분석 중...")
+    
+    if len(results_list) > 0:
+        df_res = pd.DataFrame(results_list)
+        
+        # ⚡ 1. 임계값 미만 데이터만 필터링 (Low Confidence Only)
+        df_low = df_res[df_res["Confidence"] < CONF_THRESHOLD]
+        
+        low_count = len(df_low)
+        total_count = len(df_res)
+        ratio = (low_count / total_count) * 100 if total_count > 0 else 0
+        
+        print(f"   📊 전체 샘플: {total_count}개")
+        print(f"   ⚠️ Low Conf 샘플: {low_count}개 ({ratio:.2f}%)")
+
+        if low_count == 0:
+            print("   🎉 와우! 설정한 임계값보다 낮은 신뢰도의 샘플이 하나도 없습니다.")
+        else:
+            # 저장 폴더 분리
+            timestamp = datetime.now().strftime('%m%d_%H%M%S')
+            save_dir = "./result_pipeline/low_conf_analysis"
+            os.makedirs(save_dir, exist_ok=True)
+            
+            # (1) CSV 저장 (나중에 엑셀 분석용)
+            csv_path = os.path.join(save_dir, f"low_conf_samples_{timestamp}.csv")
+            df_low.to_csv(csv_path, index=False)
+            print(f"   📄 불확실 데이터 저장됨: {csv_path}")
+
+            # -----------------------------------------------
+            # 📊 Plot 1: Low Conf 샘플들의 True vs Pred
+            # 의도: "신뢰도가 낮은 애들은 실제로도 오차가 크다(대각선에서 멀다)"는 것을 보여줌
+            # -----------------------------------------------
+            plt.figure(figsize=(8, 8))
+            
+            # 가스별로 점 모양/색깔 다르게 표시
+            sns.scatterplot(
+                data=df_low, x="True_PPM", y="Pred_PPM", 
+                hue="Gas", style="Gas", s=100, alpha=0.9, palette="Set1"
+            )
+            
+            # 이상적인 정답선 (y=x)
+            max_val = max(df_low["True_PPM"].max(), df_low["Pred_PPM"].max())
+            plt.plot([0, max_val], [0, max_val], 'k--', label="Ideal Line (Perfect Prediction)")
+            
+            plt.title(f"Performance on Low Confidence Samples (<{CONF_THRESHOLD})")
+            plt.xlabel("True PPM")
+            plt.ylabel("Predicted PPM")
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            
+            save_path = os.path.join(save_dir, f"scatter_low_conf_{timestamp}.png")
+            plt.savefig(save_path, dpi=300)
+            print(f"   📊 [Plot 1] 저장됨: {save_path}")
+            
+            # -----------------------------------------------
+            # 📊 Plot 2: 어떤 가스를 유독 헷갈려하는가? (Bar Chart)
+            # 의도: "특히 벤젠이 헷갈리는 경우가 많으므로 주의해야 합니다" 같은 결론 도출용
+            # -----------------------------------------------
+            plt.figure(figsize=(8, 5))
+            ax = sns.countplot(data=df_low, x="Gas", palette="pastel")
+            
+            # 막대 위에 숫자 표시
+            for p in ax.patches:
+                ax.annotate(f'{int(p.get_height())}', (p.get_x() + p.get_width() / 2., p.get_height()),
+                            ha='center', va='bottom', fontsize=12, color='black', xytext=(0, 5),
+                            textcoords='offset points')
+
+            plt.title(f"Count of Low Confidence Samples by Gas (<{CONF_THRESHOLD})")
+            plt.ylabel("Count")
+            
+            save_path = os.path.join(save_dir, f"count_low_conf_by_gas_{timestamp}.png")
+            plt.savefig(save_path, dpi=300)
+            print(f"   📊 [Plot 2] 저장됨: {save_path}")
+
+            # -----------------------------------------------
+            # 📊 Plot 3: 가스별 오차 분포 (Box Plot)
+            # 의도: "신뢰도가 낮을 때 오차 범위가 얼마나 넓게 퍼지는지(위험도)" 시각화
+            # -----------------------------------------------
+            plt.figure(figsize=(8, 6))
+            sns.boxplot(data=df_low, x="Gas", y="Abs_Error", palette="Set2")
+            sns.stripplot(data=df_low, x="Gas", y="Abs_Error", color=".3", alpha=0.6) # 점도 같이 찍기
+            
+            plt.title(f"Absolute Error Distribution (Low Confidence Samples)")
+            plt.ylabel("Absolute Error (PPM)")
+            
+            save_path = os.path.join(save_dir, f"boxplot_error_low_conf_{timestamp}.png")
+            plt.savefig(save_path, dpi=300)
+            print(f"   📊 [Plot 3] 저장됨: {save_path}")
+
+    else:
+        print("⚠️ 추론된 데이터가 없습니다.")
+    
+        
+    
+    
 
 # ==============================================================================
 # Main Entry Point

@@ -19,7 +19,7 @@ data/*
 result/*
 result_analysis/*
 wandb
+result_pipeline
 paper/*
-
 
 # Personal
